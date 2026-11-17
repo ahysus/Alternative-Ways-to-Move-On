@@ -81,15 +81,16 @@ def test_closing_a_road_on_the_route_changes_it_and_shows_added_time():
     assert web.post("/api/toggle", json={"segment": road}).get_json()["closed"] == []
 
 
-def test_the_two_algorithms_agree_for_every_mode_and_destination():
+def test_the_three_algorithms_agree_for_every_mode_and_destination():
     web = client()
     targets = ["any", "hospital", "fire station", "barangay hall", "evacuation center"]
     targets += ["place:" + key for key in server.network.destinations]
     for mode in ["vehicle", "walking"]:
         for target in targets:
             answer = state(web, mode=mode, target=target, **CLICK)
-            assert answer["dijkstra"]["found"] == answer["dstar"]["found"]
-            assert abs(answer["dijkstra"]["time_s"] - answer["dstar"]["time_s"]) < 1e-6
+            for other in ("astar", "dstar"):
+                assert answer["dijkstra"]["found"] == answer[other]["found"]
+                assert abs(answer["dijkstra"]["time_s"] - answer[other]["time_s"]) < 1e-6
 
 
 def test_scenario_a_shows_vehicle_cut_off_with_walking_route():
@@ -139,3 +140,12 @@ def test_roads_are_marked_inside_or_outside_guisad():
 def test_critical_endpoint_returns_rows():
     rows = client().get("/api/critical?mode=vehicle").get_json()
     assert rows and {"segment", "isolated", "added_s"} <= set(rows[0])
+
+
+def test_vehicle_mode_also_gives_the_walking_route():
+    web = client()
+    answer = state(web, mode="vehicle", **CLICK)
+    assert answer["walking"]["found"] is True
+    assert answer["walking"]["segments"]
+    # In walking mode the main routes are already walking routes, so no extra one is sent.
+    assert "walking" not in state(web, mode="walking", **CLICK)

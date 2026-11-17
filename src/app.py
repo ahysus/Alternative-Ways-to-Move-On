@@ -5,6 +5,7 @@ from flask import Flask, jsonify, render_template, request
 
 import config
 from analysis import describe_path, destination_names, isolation_report, rank_critical_roads, route_from_node
+from astar import astar_route
 from dstar_lite import DStarLite
 from network import MODES, distance_m, load_network, read_json
 
@@ -136,9 +137,16 @@ def get_state():
                 "snap_m": distance_m(lat, lon, place["lat"], place["lon"]),
             },
             "before_route": without_nodes(route_from_node(network, mode, start, target, intact=True)),
+            # The three algorithms being compared. The page draws all three routes at once.
             "dijkstra": without_nodes(route),
+            "astar": without_nodes(astar_route(network, mode, start, target)),
             "dstar": without_nodes(dstar_route(mode, target, start)),
         })
+        # In vehicle mode, also give the walking route from the same spot, so the page
+        # can show how walkers would go. Footpath data for Guisad is still incomplete.
+        if mode == "vehicle":
+            walk_start = network.nearest_node(lat, lon, "walking")
+            state["walking"] = without_nodes(route_from_node(network, "walking", walk_start, target))
         # With no route in this mode, check the other mode so the page can suggest it.
         if not route["found"]:
             other_mode = "walking" if mode == "vehicle" else "vehicle"

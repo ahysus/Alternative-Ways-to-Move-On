@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import pytest
 
 from analysis import dijkstra_route, isolation_report, rank_critical_roads
+from astar import astar_route
 from dstar_lite import DStarLite
 from network import RoadNetwork, load_network
 
@@ -230,4 +231,43 @@ def test_dstar_lite_still_correct_after_start_moves(guisad):
     assert result["found"] == fresh["found"]
     if fresh["found"]:
         assert result["time_s"] == pytest.approx(fresh["time_s"], abs=1e-6)
+    network.reset()
+
+
+def test_astar_matches_dijkstra_on_small_network_through_changes():
+    """A* must find the same travel time as Dijkstra before, during and after a closure."""
+    network = small_network()
+    start = network.points["A"]["node"]["vehicle"]
+    for close in (False, True, False):
+        network.set_closed(1, close)
+        expected = dijkstra_route(network, "vehicle", "A")
+        actual = astar_route(network, "vehicle", start)
+        assert actual["found"] == expected["found"]
+        assert actual["length_m"] == pytest.approx(expected["length_m"])
+
+
+def test_astar_reports_no_route_when_cut_off():
+    network = small_network()
+    network.set_closed(0, True)
+    assert astar_route(network, "vehicle", network.points["A"]["node"]["vehicle"])["found"] is False
+
+
+@pytest.mark.parametrize("mode", ["vehicle", "walking"])
+def test_astar_matches_dijkstra_on_real_roads_during_random_closures(guisad, mode):
+    """Same check as for D* Lite: A* must always find the fastest time, like Dijkstra."""
+    network = guisad
+    network.reset()
+    generator = random.Random(2027)
+    segment_ids = list(network.segment_edges[mode])
+    for _ in range(40):
+        if network.closed and generator.random() < 0.3:
+            network.set_closed(generator.choice(sorted(network.closed)), False)
+        else:
+            network.set_closed(generator.choice(segment_ids), True)
+        for point_id, point in network.points.items():
+            expected = dijkstra_route(network, mode, point_id)
+            actual = astar_route(network, mode, point["node"][mode])
+            assert actual["found"] == expected["found"]
+            if expected["found"]:
+                assert actual["time_s"] == pytest.approx(expected["time_s"], abs=1e-6)
     network.reset()

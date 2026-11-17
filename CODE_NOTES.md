@@ -11,9 +11,10 @@ Every code file also has plain-English comments on each step. This page gives th
 | `src/network.py` | Loads the saved roads, builds the vehicle and walking graphs, tracks closures | Every time the server starts |
 | `src/analysis.py` | Dijkstra: isolation check, routes, critical road ranking | Every update |
 | `src/dstar_lite.py` | D* Lite, implemented for this project because NetworkX does not include it | Every update |
+| `src/astar.py` | A*, implemented for this project so its chosen route can be compared with Dijkstra and D* Lite | Every update |
 | `src/app.py` | The web server: receives clicks from the page and sends back results | While the demo runs |
 | `templates/index.html` | The page: map, controls, legend | In the browser |
-| `tests/` | Automated checks, 29 in total | `python -m pytest tests -q` |
+| `tests/` | Automated checks, 34 in total | `python -m pytest tests -q` |
 | `data/` | Saved roads, demo points, destinations, demo closures | Read at startup |
 
 ## What the road data looks like
@@ -40,8 +41,11 @@ That is much faster than searching separately from every location.
 3. It runs:
    - **Isolation check** (`isolation_report`, Dijkstra): which demo locations cannot reach the destination. These dots turn red.
    - **Before route** (`route_from_node` with `intact=True`, Dijkstra): the route as if nothing were closed. Drawn orange.
-   - **Current route** (`DStarLite.plan`): drawn blue.
-   - **Dijkstra check** (`route_from_node`): the same route by Dijkstra, kept to confirm D* Lite.
+   - **The three compared routes**, all drawn at once with stacked widths so overlapping routes stay visible:
+     Dijkstra (`route_from_node`, thick green), A* (`astar_route`, medium cyan) and D* Lite (`DStarLite.plan`, thin blue).
+     Where all three agree, the road shows three stripes. Where one differs, its color splits off.
+   - **Walking route** (vehicle mode only, `route_from_node` in walking mode): dashed brown. Most Guisad
+     footpaths and stairs are not mapped in OpenStreetMap yet, so it often follows vehicle roads.
 4. **The page** colors the roads and markers and updates the legend.
 
 Closing a road sends `/api/toggle` with the segment id. The server marks it closed in both graphs.

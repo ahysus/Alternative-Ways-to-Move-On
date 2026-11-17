@@ -101,18 +101,27 @@ const minutes = (seconds) => (seconds / 60).toFixed(1) + " min";
 // Tells which click tool is selected: "start" or "close".
 const currentTool = () => document.querySelector('input[name="tool"]:checked').value;
 
-// The blue current route comes from D* Lite, which repairs its earlier search after
-// each closure. Dijkstra gives the orange "before" route and the marker colors, and
-// the backend still runs it to check D* Lite.
-// Chooses how each road looks, based on the mode, closures and current route.
+// The routes drawn on top of the roads, in drawing order (first is lowest).
+// Dijkstra, A* and D* Lite usually choose the same roads, so they are stacked:
+// thick green at the bottom, medium cyan, then thin blue on top. Where they agree,
+// the road shows all three colors as stripes. Where one differs, its color splits off.
+// The orange "before" route is the Dijkstra route as if no road were closed.
+// The dashed brown walking route is shown in vehicle mode, drawn on top so it stays visible.
+const ROUTES = [
+  { key: "before_route", label: "Route before closures", color: "#f39c12", weight: 5, opacity: 0.9 },
+  { key: "dijkstra", label: "Dijkstra route", color: "#2ca02c", weight: 13, opacity: 1 },
+  { key: "astar", label: "A* route", color: "#00b8d9", weight: 8, opacity: 1 },
+  { key: "dstar", label: "D* Lite route", color: "#1a56c4", weight: 3, opacity: 1 },
+  { key: "walking", label: "Walking route", color: "#8b4513", weight: 3, opacity: 1, dashArray: "3 7" },
+];
+// The three algorithms being compared.
+const ALGORITHMS = ["dijkstra", "astar", "dstar"];
+// Holds the route lines, so they can be cleared and redrawn on each update.
+const routeLayer = L.layerGroup();
+
+// Chooses how each road looks, based on the mode and closures. Routes are drawn separately.
 function styleRoad(segment) {
-  const hasRoute = lastState && lastState.start && lastState.dstar.found;
-  const hadRoute = lastState && lastState.start && lastState.before_route.found;
-  const route = hasRoute ? new Set(lastState.dstar.segments) : new Set();
-  const before = hadRoute ? new Set(lastState.before_route.segments) : new Set();
   if (closed.has(segment.id)) return { color: "#e00000", weight: 6, opacity: 1 };
-  if (route.has(segment.id)) return { color: "#1a56c4", weight: 6, opacity: 1 };
-  if (before.has(segment.id)) return { color: "#f39c12", weight: 5, opacity: 0.9 };
   // Roads outside Guisad are only used to reach outside destinations, so they are faint.
   const fade = segment.in_study_area ? 1 : 0.3;
   if (choice.mode === "vehicle" && !segment.drivable) return { color: "#c9c9c9", weight: 1, opacity: 0.7 * fade };
@@ -218,6 +227,8 @@ function drawMap() {
     onMarkerClick(marker, () => setStart(point.lat, point.lon));
     pointMarkers[point.id] = marker;
   }
+  // The route lines go above the roads.
+  routeLayer.addTo(map);
   // Zoom to fit Guisad.
   map.fitBounds(L.featureGroup(outlines).getBounds().pad(0.15));
 }
@@ -240,8 +251,8 @@ function showState(state) {
   document.getElementById("closedCount").textContent = `${closed.size} road segment(s) closed`;
   // Recolor the roads.
   for (const { line, segment } of Object.values(roadLines)) line.setStyle(styleRoad(segment));
-  // Keep the route and closures on top of the other roads.
-  if (state.start && state.dstar.found) for (const id of state.dstar.segments) roadLines[id].line.bringToFront();
+  drawRoutes(state);
+  // Keep closures on top, so a closed road is visible even under the "before" route.
   for (const id of closed) roadLines[id].line.bringToFront();
   // Recolor the demo markers using this mode's isolation result.
   const cutOff = new Set(state.cut_off);
@@ -252,6 +263,26 @@ function showState(state) {
   showStatus(state);
   showMapKey(state);
 }
+
+// Tells whether a route exists in this answer and has roads to draw.
+const hasLine = (state, key) => Boolean(state.start && state[key] && state[key].found && state[key].segments.length);
+
+// Redraws every route line, lowest first, following the order in ROUTES.
+function drawRoutes(state) {
+  routeLayer.clearLayers();
+  for (const route of ROUTES) {
+    if (!hasLine(state, route.key)) continue;
+    for (const id of state[route.key].segments) {
+      L.polyline(roadLines[id].segment.line, {
+        color: route.color, weight: route.weight, opacity: route.opacity,
+        dashArray: route.dashArray, interactive: false,
+      }).addTo(routeLayer);
+    }
+  }
+}
+
+// Checks whether two routes use exactly the same road segments.
+const sameRoads = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
 
 // A map key sample drawn like a road on the map: same color, thickness and opacity.
 const lineSample = (color, weight, opacity) =>
@@ -266,18 +297,22 @@ function showMapKey(state) {
   const rows = [];
   const add = (sample, label) =>
     rows.push(`<div class="keyRow"><span class="sample">${sample}</span>${label}</div>`);
-  const hasRoute = state.start && state.dstar.found && state.dstar.segments.length > 0;
-  // The orange "before" route shows only where it differs from the current route.
-  const current = new Set(hasRoute ? state.dstar.segments : []);
-  const hadRoute = state.start && state.before_route.found;
-  const beforeVisible = hadRoute && state.before_route.segments.some((id) => !current.has(id) && !closed.has(id));
+  // The orange "before" route can be seen only where the other routes do not cover it.
+  const current = new Set(ALGORITHMS.flatMap((key) => (hasLine(state, key) ? state[key].segments : [])));
+  const beforeVisible = hasLine(state, "before_route") &&
+    state.before_route.segments.some((id) => !current.has(id) && !closed.has(id));
 
   add(lineSample("#555", 2, 0.85), choice.mode === "vehicle" ? "Road a vehicle can use" : "Road or path a walker can use");
   if (choice.mode === "vehicle") add(lineSample("#c9c9c9", 2, 0.7), "Footpath or stairs (walkers only)");
   add(lineSample("#555", 2, 0.85 * 0.3), "Outside Guisad (used only to reach destinations)");
   add(`<span class="line" style="height:0;border-top:2px dashed #1f7a8c"></span>`, "Guisad Central and Guisad Surong boundary");
-  if (hasRoute) add(lineSample("#1a56c4", 6, 1), "Current route");
-  if (beforeVisible) add(lineSample("#f39c12", 5, 0.9), "Route before closures");
+  for (const route of ROUTES) {
+    if (route.key === "before_route" ? !beforeVisible : !hasLine(state, route.key)) continue;
+    const sample = route.dashArray
+      ? `<span class="line" style="height:0;border-top:${route.weight}px dashed ${route.color}"></span>`
+      : lineSample(route.color, Math.min(route.weight, 10), route.opacity);
+    add(sample, route.label);
+  }
   if (closed.size) add(lineSample("#e00000", 6, 1), "Closed road");
   if (state.start) add(dotSample("#1a56c4", 9, "#fff", 3), "Starting point");
   add(dotSample("#8e24aa", 7, "#4a148c", 1), "Destination (click to select)");
@@ -307,9 +342,20 @@ function showStatus(state) {
     return;
   }
   // A start connected to the destination's own junction has no route to draw.
-  const atDestination = now.segments.length === 0
-    ? `<div class="hint">This spot connects directly to ${safe(now.destination.join(", "))}, so no travel is needed. Click farther away, or choose another destination.</div>` : "";
-  area.innerHTML = far + atDestination;
+  if (now.segments.length === 0) {
+    area.innerHTML = far + `<div class="hint">This spot connects directly to ${safe(now.destination.join(", "))}, so no travel is needed. Click farther away, or choose another destination.</div>`;
+    return;
+  }
+  // Say whether the three algorithms chose the same roads, since stacked lines can hide it.
+  const differing = ALGORITHMS.filter((key) => !sameRoads(state[key].segments, now.segments));
+  const names = { dijkstra: "Dijkstra", astar: "A*" };
+  const agreement = differing.length === 0
+    ? `<div class="ok">Dijkstra, A* and D* Lite all chose the same route.</div>`
+    : `<div class="hint">${differing.map((key) => names[key]).join(" and ")} chose a different route from D* Lite, with the same travel time.</div>`;
+  // The walking route depends on footpath data, which is still incomplete for Guisad.
+  const walking = hasLine(state, "walking")
+    ? `<div class="small">Dashed brown: walking route (${Math.round(state.walking.length_m)} m, ${minutes(state.walking.time_s)}). Most Guisad footpaths and stairs are not yet mapped, so walking routes often follow vehicle roads.</div>` : "";
+  area.innerHTML = far + agreement + walking;
 }
 
 // Asks the backend for the current results, then displays them.

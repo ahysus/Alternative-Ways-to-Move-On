@@ -10,8 +10,8 @@ It does not detect landslides. See `CODE_NOTES.md` for how it works and `DEMO_SC
 
 ## Status
 - Working prototype with a basic page. The professor asked for backend focus and a basic UI only.
-- Blue route: D* Lite. Orange before-route and marker colors: Dijkstra. Dijkstra also checks D* Lite.
-- 29 automated tests pass: `python -m pytest tests -q`.
+- Routes drawn together: Dijkstra (thick green), A* (medium cyan), D* Lite (thin blue), plus the walking route (dashed brown) in vehicle mode. Orange before-route and marker colors: Dijkstra.
+- 34 automated tests pass: `python -m pytest tests -q`.
 - Demo data is simulated: 10 demo locations, a placeholder evacuation center, 3 demo closures, assumed speeds.
 - Not done yet: verified purok points, HazardHunterPH landslide levels, slope, timed comparison of
   Dijkstra only / D* Lite only / hybrid, nearest-road (instead of nearest-junction) connections.
