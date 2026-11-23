@@ -29,6 +29,15 @@
   .line { width: 28px; }
   .dot { border-radius: 50%; box-sizing: border-box; }
   #assumptions { margin-top: 6px; }
+  /* The performance comparison table, and the color square in front of each algorithm. */
+  .compare { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 2px; }
+  .compare th, .compare td { border: 1px solid #ccc; padding: 2px 4px; text-align: right; }
+  .compare th:first-child, .compare td:first-child { text-align: left; }
+  .compare th { background: #f2f2f2; font-weight: normal; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border: 1px solid #888; }
+  /* Legend checkboxes sit inline with the label. */
+  .toggle { display: inline; margin: 0; cursor: pointer; }
+  .keyNote { font-size: 11px; color: #666; margin-left: 20px; }
 </style>
 </head>
 <body>
@@ -102,20 +111,27 @@ const minutes = (seconds) => (seconds / 60).toFixed(1) + " min";
 const currentTool = () => document.querySelector('input[name="tool"]:checked').value;
 
 // The routes drawn on top of the roads, in drawing order (first is lowest).
-// Dijkstra, A* and D* Lite usually choose the same roads, so they are stacked:
-// thick green at the bottom, medium cyan, then thin blue on top. Where they agree,
-// the road shows all three colors as stripes. Where one differs, its color splits off.
+// Most algorithms choose the same roads, so the lines are stacked from thick to thin:
+// green, yellow, cyan, blue, then a thin purple line in the middle. Where they agree, the
+// road shows all the colors as stripes. Where one differs, its color splits off.
+// Each line has a checkbox in the Legend, so a few can be compared at a time.
 // The orange "before" route is the Dijkstra route as if no road were closed.
 // The dashed brown walking route is shown in vehicle mode, drawn on top so it stays visible.
+// "name" marks the five algorithms being compared, and is used in the comparison table.
 const ROUTES = [
-  { key: "before_route", label: "Route before closures", color: "#f39c12", weight: 5, opacity: 0.9 },
-  { key: "dijkstra", label: "Dijkstra route", color: "#2ca02c", weight: 13, opacity: 1 },
-  { key: "astar", label: "A* route", color: "#00b8d9", weight: 8, opacity: 1 },
-  { key: "dstar", label: "D* Lite route", color: "#1a56c4", weight: 3, opacity: 1 },
+  { key: "before_route", label: "Route before closures (Dijkstra)", color: "#f39c12", weight: 5, opacity: 0.9,
+    note: "Found by Dijkstra as if no road were closed. It is hidden under the other lines until a closure makes them take a detour." },
+  { key: "dijkstra", name: "Dijkstra", color: "#2ca02c", weight: 17, opacity: 1 },
+  { key: "bidirectional", name: "Bidirectional Dijkstra", color: "#ffd400", weight: 13, opacity: 1 },
+  { key: "astar", name: "A*", color: "#00b8d9", weight: 9, opacity: 1 },
+  { key: "dstar", name: "D* Lite", color: "#1a56c4", weight: 5, opacity: 1 },
+  { key: "greedy", name: "Greedy Best-First", color: "#8e44ad", weight: 2, opacity: 1 },
   { key: "walking", label: "Walking route", color: "#8b4513", weight: 3, opacity: 1, dashArray: "3 7" },
 ];
-// The three algorithms being compared.
-const ALGORITHMS = ["dijkstra", "astar", "dstar"];
+// The algorithms being compared, in the order of the comparison table.
+const ALGORITHMS = ROUTES.filter((route) => route.name);
+// Lines the user has unticked in the Legend. They stay hidden until ticked again.
+const hiddenRoutes = new Set();
 // Holds the route lines, so they can be cleared and redrawn on each update.
 const routeLayer = L.layerGroup();
 
@@ -271,7 +287,7 @@ const hasLine = (state, key) => Boolean(state.start && state[key] && state[key].
 function drawRoutes(state) {
   routeLayer.clearLayers();
   for (const route of ROUTES) {
-    if (!hasLine(state, route.key)) continue;
+    if (!hasLine(state, route.key) || hiddenRoutes.has(route.key)) continue;
     for (const id of state[route.key].segments) {
       L.polyline(roadLines[id].segment.line, {
         color: route.color, weight: route.weight, opacity: route.opacity,
@@ -280,9 +296,6 @@ function drawRoutes(state) {
     }
   }
 }
-
-// Checks whether two routes use exactly the same road segments.
-const sameRoads = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
 
 // A map key sample drawn like a road on the map: same color, thickness and opacity.
 const lineSample = (color, weight, opacity) =>
@@ -297,21 +310,28 @@ function showMapKey(state) {
   const rows = [];
   const add = (sample, label) =>
     rows.push(`<div class="keyRow"><span class="sample">${sample}</span>${label}</div>`);
-  // The orange "before" route can be seen only where the other routes do not cover it.
-  const current = new Set(ALGORITHMS.flatMap((key) => (hasLine(state, key) ? state[key].segments : [])));
-  const beforeVisible = hasLine(state, "before_route") &&
-    state.before_route.segments.some((id) => !current.has(id) && !closed.has(id));
-
   add(lineSample("#555", 2, 0.85), choice.mode === "vehicle" ? "Road a vehicle can use" : "Road or path a walker can use");
   if (choice.mode === "vehicle") add(lineSample("#c9c9c9", 2, 0.7), "Footpath or stairs (walkers only)");
   add(lineSample("#555", 2, 0.85 * 0.3), "Outside Guisad (used only to reach destinations)");
   add(`<span class="line" style="height:0;border-top:2px dashed #1f7a8c"></span>`, "Guisad Central and Guisad Surong boundary");
   for (const route of ROUTES) {
-    if (route.key === "before_route" ? !beforeVisible : !hasLine(state, route.key)) continue;
+    // Every route that exists is listed, so no line on the map is ever left unexplained.
+    // The "before" route is listed further down, next to "Closed road", without a checkbox.
+    if (!hasLine(state, route.key) || route.key === "before_route") continue;
     const sample = route.dashArray
       ? `<span class="line" style="height:0;border-top:${route.weight}px dashed ${route.color}"></span>`
-      : lineSample(route.color, Math.min(route.weight, 10), route.opacity);
-    add(sample, route.label);
+      : lineSample(route.color, Math.max(3, Math.min(route.weight, 10)), route.opacity);
+    // Each route line gets a checkbox to show or hide it on the map.
+    const ticked = hiddenRoutes.has(route.key) ? "" : "checked";
+    const label = route.name ? route.name + " route" : route.label;
+    // A route with a note gets a short explanation under its name.
+    const note = route.note ? `<div class="keyNote">${route.note}</div>` : "";
+    add(sample, `<div><label class="toggle"><input type="checkbox" data-route="${route.key}" ${ticked}> ${label}</label>${note}</div>`);
+  }
+  // The orange route is always drawn when it exists, so it has an explanation but no checkbox.
+  if (hasLine(state, "before_route")) {
+    const before = ROUTES.find((route) => route.key === "before_route");
+    add(lineSample(before.color, before.weight, before.opacity), `<div>${before.label}<div class="keyNote">${before.note}</div></div>`);
   }
   if (closed.size) add(lineSample("#e00000", 6, 1), "Closed road");
   if (state.start) add(dotSample("#1a56c4", 9, "#fff", 3), "Starting point");
@@ -346,16 +366,34 @@ function showStatus(state) {
     area.innerHTML = far + `<div class="hint">This spot connects directly to ${safe(now.destination.join(", "))}, so no travel is needed. Click farther away, or choose another destination.</div>`;
     return;
   }
-  // Say whether the three algorithms chose the same roads, since stacked lines can hide it.
-  const differing = ALGORITHMS.filter((key) => !sameRoads(state[key].segments, now.segments));
-  const names = { dijkstra: "Dijkstra", astar: "A*" };
-  const agreement = differing.length === 0
-    ? `<div class="ok">Dijkstra, A* and D* Lite all chose the same route.</div>`
-    : `<div class="hint">${differing.map((key) => names[key]).join(" and ")} chose a different route from D* Lite, with the same travel time.</div>`;
   // The walking route depends on footpath data, which is still incomplete for Guisad.
   const walking = hasLine(state, "walking")
     ? `<div class="small">Dashed brown: walking route (${Math.round(state.walking.length_m)} m, ${minutes(state.walking.time_s)}). Most Guisad footpaths and stairs are not yet mapped, so walking routes often follow vehicle roads.</div>` : "";
-  area.innerHTML = far + agreement + walking;
+  area.innerHTML = far + comparisonTable(state) + walking;
+}
+
+// Builds the performance table: one row per algorithm, with its route and its work.
+//   Travel time:        how long the chosen route takes. Lowest is best.
+//   Junctions checked:  how much searching the algorithm did. It does not depend on the
+//                       computer's speed, so it is the fairest measure of effort.
+//   Search time (ms):   how long the search took on this computer. It changes a little
+//                       on every run, so compare it over many runs, not just one.
+function comparisonTable(state) {
+  const fastest = Math.min(...ALGORITHMS.map(({ key }) => state[key].time_s));
+  const rows = ALGORITHMS.map(({ key, name, color }) => {
+    const result = state[key];
+    // A route slower than the fastest one is marked, which only Greedy Best-First can do.
+    const extra = result.time_s - fastest > 0.05 ? ` <b>(+${minutes(result.time_s - fastest)})</b>` : "";
+    // After the first click, D* Lite only repairs its earlier search, so its numbers are small.
+    const note = key === "dstar" ? (result.first_search ? " (first search)" : " (repair only)") : "";
+    return `<tr><td><span class="swatch" style="background:${color}"></span>${name}${note}</td>` +
+      `<td>${Math.round(result.length_m)} m</td><td>${minutes(result.time_s)}${extra}</td>` +
+      `<td>${result.expanded}</td><td>${result.ms.toFixed(2)}</td></tr>`;
+  }).join("");
+  return `<table class="compare"><tr><th>Algorithm</th><th>Distance</th><th>Travel time</th>` +
+    `<th>Junctions checked</th><th>Search time (ms)</th></tr>${rows}</table>` +
+    `<div class="small">Junctions checked shows how much searching each algorithm did (fewer is less work). ` +
+    `Search time depends on the computer and changes slightly on every run.</div>`;
 }
 
 // Asks the backend for the current results, then displays them.
@@ -395,6 +433,16 @@ function connectControls() {
   // Remove the road highlight when switching back to setting the starting point.
   document.querySelectorAll('input[name="tool"]').forEach((radio) => {
     radio.onchange = () => { showPreview(null); showMapKey(lastState); };
+  });
+  // A Legend checkbox shows or hides one route line. The Legend is rebuilt on every update,
+  // so one listener on the whole Legend handles all its checkboxes.
+  document.getElementById("mapKey").addEventListener("change", (event) => {
+    const key = event.target.dataset.route;
+    if (!key) return;
+    if (event.target.checked) hiddenRoutes.delete(key);
+    else hiddenRoutes.add(key);
+    drawRoutes(lastState);
+    for (const id of closed) roadLines[id].line.bringToFront();
   });
   document.getElementById("mode").onchange = (event) => { choice.mode = event.target.value; refresh(); };
   document.getElementById("target").onchange = (event) => setTarget(event.target.value);

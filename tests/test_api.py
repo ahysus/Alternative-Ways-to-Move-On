@@ -81,14 +81,14 @@ def test_closing_a_road_on_the_route_changes_it_and_shows_added_time():
     assert web.post("/api/toggle", json={"segment": road}).get_json()["closed"] == []
 
 
-def test_the_three_algorithms_agree_for_every_mode_and_destination():
+def test_the_exact_algorithms_agree_for_every_mode_and_destination():
     web = client()
     targets = ["any", "hospital", "fire station", "barangay hall", "evacuation center"]
     targets += ["place:" + key for key in server.network.destinations]
     for mode in ["vehicle", "walking"]:
         for target in targets:
             answer = state(web, mode=mode, target=target, **CLICK)
-            for other in ("astar", "dstar"):
+            for other in ("astar", "bidirectional", "dstar"):
                 assert answer["dijkstra"]["found"] == answer[other]["found"]
                 assert abs(answer["dijkstra"]["time_s"] - answer[other]["time_s"]) < 1e-6
 
@@ -149,3 +149,13 @@ def test_vehicle_mode_also_gives_the_walking_route():
     assert answer["walking"]["segments"]
     # In walking mode the main routes are already walking routes, so no extra one is sent.
     assert "walking" not in state(web, mode="walking", **CLICK)
+
+
+def test_every_compared_route_has_performance_numbers():
+    web = client()
+    answer = state(web, mode="vehicle", **CLICK)
+    for name in ("dijkstra", "astar", "greedy", "bidirectional", "dstar"):
+        assert answer[name]["found"] is True
+        assert answer[name]["ms"] >= 0
+        assert answer[name]["expanded"] >= 0
+        assert answer[name]["length_m"] > 0

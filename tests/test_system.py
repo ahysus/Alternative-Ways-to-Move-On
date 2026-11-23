@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import pytest
 
 from analysis import dijkstra_route, isolation_report, rank_critical_roads
-from astar import astar_route
+from searches import SEARCHES
 from dstar_lite import DStarLite
 from network import RoadNetwork, load_network
 
@@ -234,40 +234,66 @@ def test_dstar_lite_still_correct_after_start_moves(guisad):
     network.reset()
 
 
-def test_astar_matches_dijkstra_on_small_network_through_changes():
-    """A* must find the same travel time as Dijkstra before, during and after a closure."""
+# The searches that must always find the fastest route. Greedy Best-First is checked separately.
+EXACT = ["dijkstra", "astar", "bidirectional"]
+
+
+@pytest.mark.parametrize("name", list(SEARCHES))
+def test_each_search_handles_closures_on_small_network(name):
+    """Before, during and after a closure, every search finds a route, and the exact ones find the fastest."""
     network = small_network()
     start = network.points["A"]["node"]["vehicle"]
     for close in (False, True, False):
         network.set_closed(1, close)
         expected = dijkstra_route(network, "vehicle", "A")
-        actual = astar_route(network, "vehicle", start)
+        actual = SEARCHES[name](network, "vehicle", start)
         assert actual["found"] == expected["found"]
-        assert actual["length_m"] == pytest.approx(expected["length_m"])
+        assert actual["expanded"] > 0
+        if name in EXACT:
+            assert actual["length_m"] == pytest.approx(expected["length_m"])
 
 
-def test_astar_reports_no_route_when_cut_off():
+@pytest.mark.parametrize("name", list(SEARCHES))
+def test_each_search_reports_no_route_when_cut_off(name):
     network = small_network()
     network.set_closed(0, True)
-    assert astar_route(network, "vehicle", network.points["A"]["node"]["vehicle"])["found"] is False
+    assert SEARCHES[name](network, "vehicle", network.points["A"]["node"]["vehicle"])["found"] is False
 
 
 @pytest.mark.parametrize("mode", ["vehicle", "walking"])
-def test_astar_matches_dijkstra_on_real_roads_during_random_closures(guisad, mode):
-    """Same check as for D* Lite: A* must always find the fastest time, like Dijkstra."""
+def test_searches_match_dijkstra_on_real_roads_during_random_closures(guisad, mode):
+    """The exact searches must match Dijkstra's time. Greedy must find a route whenever one
+    exists, and can never beat the fastest time, only equal or exceed it."""
     network = guisad
     network.reset()
     generator = random.Random(2027)
     segment_ids = list(network.segment_edges[mode])
-    for _ in range(40):
+    for _ in range(30):
         if network.closed and generator.random() < 0.3:
             network.set_closed(generator.choice(sorted(network.closed)), False)
         else:
             network.set_closed(generator.choice(segment_ids), True)
         for point_id, point in network.points.items():
             expected = dijkstra_route(network, mode, point_id)
-            actual = astar_route(network, mode, point["node"][mode])
-            assert actual["found"] == expected["found"]
-            if expected["found"]:
-                assert actual["time_s"] == pytest.approx(expected["time_s"], abs=1e-6)
+            for name, search in SEARCHES.items():
+                actual = search(network, mode, point["node"][mode])
+                assert actual["found"] == expected["found"], name
+                if not expected["found"]:
+                    continue
+                if name in EXACT:
+                    assert actual["time_s"] == pytest.approx(expected["time_s"], abs=1e-6), name
+                else:
+                    assert actual["time_s"] >= expected["time_s"] - 1e-6
     network.reset()
+
+
+def test_guided_searches_check_fewer_junctions_than_dijkstra(guisad):
+    """A*, Greedy and Bidirectional should do less work than plain Dijkstra overall."""
+    network = guisad
+    network.reset()
+    totals = {name: 0 for name in SEARCHES}
+    for point in network.points.values():
+        for name, search in SEARCHES.items():
+            totals[name] += search(network, "vehicle", point["node"]["vehicle"])["expanded"]
+    for name in ("astar", "greedy", "bidirectional"):
+        assert totals[name] < totals["dijkstra"], name

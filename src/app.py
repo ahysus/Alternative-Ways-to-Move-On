@@ -5,7 +5,7 @@ from flask import Flask, jsonify, render_template, request
 
 import config
 from analysis import describe_path, destination_names, isolation_report, rank_critical_roads, route_from_node
-from astar import astar_route
+from searches import SEARCHES
 from dstar_lite import DStarLite
 from network import MODES, distance_m, load_network, read_json
 
@@ -129,7 +129,10 @@ def get_state():
         # Connect the clicked position to the nearest junction in this mode's graph.
         start = network.nearest_node(lat, lon, mode)
         place = network.nodes[start]
-        route = route_from_node(network, mode, start, target)
+        # Run every one-time search being compared: Dijkstra, A*, Greedy Best-First and
+        # Bidirectional Dijkstra. Each answer includes its route and its performance numbers.
+        compared = {name: search(network, mode, start, target) for name, search in SEARCHES.items()}
+        route = compared["dijkstra"]
         state.update({
             "start": {
                 "lat": place["lat"],
@@ -137,10 +140,10 @@ def get_state():
                 "snap_m": distance_m(lat, lon, place["lat"], place["lon"]),
             },
             "before_route": without_nodes(route_from_node(network, mode, start, target, intact=True)),
-            # The three algorithms being compared. The page draws all three routes at once.
-            "dijkstra": without_nodes(route),
-            "astar": without_nodes(astar_route(network, mode, start, target)),
+            # D* Lite reuses its earlier search, so after the first click its numbers show
+            # only the repair work. "first_search" tells the page which case it is.
             "dstar": without_nodes(dstar_route(mode, target, start)),
+            **{name: without_nodes(answer) for name, answer in compared.items()},
         })
         # In vehicle mode, also give the walking route from the same spot, so the page
         # can show how walkers would go. Footpath data for Guisad is still incomplete.
